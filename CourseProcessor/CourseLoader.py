@@ -341,10 +341,6 @@ class StepikCourseLoader:
             }
         }
         
-        # Обертка уже не нужна, так как _make_request внутри session post используется в декораторе
-        # Но здесь мы используем session.post напрямую, поэтому нужен декоратор или обработка
-        # Т.к. enroll_in_course - это POST, используем обертку
-        
         @make_request_with_retry
         def execute():
             return self.session.post(

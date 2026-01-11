@@ -56,7 +56,7 @@ async def text_embed(req: TextRequest):
 
 if __name__ == "__main__":
     HOST = "0.0.0.0"  
-    PORT = 8000       
+    PORT = 8001       
     WORKERS = 1       
     
     print(f"Запуск ML Backend на http://{HOST}:{PORT}")
