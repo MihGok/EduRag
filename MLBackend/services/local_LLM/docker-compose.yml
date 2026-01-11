@@ -1,0 +1,21 @@
+services:
+  llm-endpoint:
+    build: .
+    container_name: llm_endpoint
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+    environment:
+      DEFAULT_MODEL_PATH: /models/saiga_nemo_12b.Q4_K_M.gguf
+      DEFAULT_N_CTX: "4096"
+      DEFAULT_N_GPU_LAYERS: "-1"
+
+    volumes:
+      - ./models:/models:ro
+
+    # Для совместимости с твоей версией Compose используем gpus: all
+    gpus: all
+
+    # Явно указываем команду (можно убрать — будет использован CMD из Dockerfile)
+    command: ["/opt/venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
