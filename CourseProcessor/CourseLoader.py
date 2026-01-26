@@ -290,6 +290,54 @@ class StepikCourseLoader:
         if not name:
             return 'Unnamed'
         return name
+    
+    def get_course_outline(self, course: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Собирает структуру курса (список всех уроков с названиями) БЕЗ скачивания контента.
+        Нужно для передачи списка уроков в LLM.
+        """
+        cid = course.get('id')
+        print(f"[INFO] Сбор структуры курса {cid} для анализа...")
+        
+        # 1. Получаем секции
+        section_ids = course.get('sections') or []
+        if not section_ids:
+            return []
+        
+        sections = self.fetch_objects('sections', section_ids)
+        sections.sort(key=lambda x: x.get('position', 0))
+        
+        all_lessons_metadata = []
+        
+        # 2. Проходим по секциям и собираем юниты
+        for section in sections:
+            unit_ids = section.get('units') or []
+            if not unit_ids:
+                continue
+                
+            # Загружаем все юниты секции разом
+            units = self.fetch_objects('units', unit_ids)
+            units.sort(key=lambda x: x.get('position', 0))
+            
+            # Собираем ID уроков
+            lesson_ids = [u.get('lesson') for u in units if u.get('lesson')]
+            
+            # Загружаем метаданные уроков (названия)
+            lessons = self.fetch_objects('lessons', lesson_ids)
+            lessons_map = {l['id']: l for l in lessons}
+            
+            for unit in units:
+                lid = unit.get('lesson')
+                lesson = lessons_map.get(lid)
+                if lesson:
+                    all_lessons_metadata.append({
+                        'lesson_id': lesson['id'],
+                        'title': lesson['title'],
+                        'section_title': section['title'] # Может пригодиться для контекста
+                    })
+                    
+        print(f"[INFO] Найдено уроков: {len(all_lessons_metadata)}")
+        return all_lessons_metadata
 
     def fetch_object_single(self, object_type: str, object_id: int) -> Dict[str, Any]:
         url = f"{self.API_URL}/{object_type}/{object_id}"
@@ -435,45 +483,36 @@ class StepikCourseLoader:
         except Exception as e:
             print(f"Ошибка сохранения {path}: {e}")
 
-    def process_course(self, course: Dict[str, Any]):
+    def process_course(self, course: Dict[str, Any], allowed_lesson_ids: Optional[List[int]] = None):
         cid = course.get('id')
         title = self._sanitize_filename(course.get('title', f'course_{cid}'))
         course_dir = f"Course_{cid}_{title}"
         os.makedirs(course_dir, exist_ok=True)
-        print(f"\n[{cid}] Курс: {title}")
         
+        # Логика записи на курс
         is_enrolled = course.get('is_enrolled', False)
         if not is_enrolled:
-            print(f"[INFO] Не записаны на курс {cid}. Попытка записи...")
-            enrolled = self.enroll_in_course(cid)
-            if not enrolled:
-                print(f"[WARN] Не удалось записаться на курс {cid}. Контент может быть недоступен.")
-            else:
+            if not self.check_enrollment(cid):
+                print(f"[INFO] Не записаны на курс {cid}. Попытка записи...")
+                self.enroll_in_course(cid)
                 time.sleep(1)
-        else:
-            print(f"[INFO] Уже записаны на курс {cid}")
         
         self.save_json(course, course_dir, f"course_{cid}.json")
 
         section_ids = course.get('sections') or []
-        if not section_ids:
-            print("  Нет секций.")
-            return
-
         sections = self.fetch_objects('sections', section_ids)
         sections.sort(key=lambda x: x.get('position', 0))
+        
         for s in sections:
-            self.process_section(s, course_dir)
+            # Передаем фильтр дальше в секцию
+            self.process_section(s, course_dir, allowed_lesson_ids)
 
-    def process_section(self, section: Dict[str, Any], parent_dir: str):
+
+    def process_section(self, section: Dict[str, Any], parent_dir: str, allowed_lesson_ids: Optional[List[int]] = None):
         sid = section.get('id')
         pos = section.get('position', 0)
         title = self._sanitize_filename(section.get('title', f'Section_{sid}'))
-
         section_dir = os.path.join(parent_dir, f"Section_{pos:02d}_{title}")
-        os.makedirs(section_dir, exist_ok=True)
-        print(f"  -> Секция {pos}: {title}")
-        self.save_json(section, section_dir, f"section_{sid}.json")
 
         unit_ids = section.get('units') or []
         if not unit_ids:
@@ -481,11 +520,31 @@ class StepikCourseLoader:
 
         units = self.fetch_objects('units', unit_ids)
         units.sort(key=lambda x: x.get('position', 0))
-        lesson_ids = [u.get('lesson') for u in units if u.get('lesson')]
+        
+        # Фильтрация юнитов перед обработкой
+        units_to_process = []
+        if allowed_lesson_ids is not None:
+            # Если фильтр включен, оставляем только юниты с разрешенными уроками
+            allowed_set = set(allowed_lesson_ids)
+            for u in units:
+                if u.get('lesson') in allowed_set:
+                    units_to_process.append(u)
+        else:
+            units_to_process = units
+
+        if not units_to_process:
+            # Если в секции нет полезных уроков, не создаем папку и выходим
+            return
+
+        os.makedirs(section_dir, exist_ok=True)
+        self.save_json(section, section_dir, f"section_{sid}.json")
+
+        # Загрузка объектов уроков для оставшихся юнитов
+        lesson_ids = [u.get('lesson') for u in units_to_process if u.get('lesson')]
         lessons = self.fetch_objects('lessons', lesson_ids)
         lessons_map = {l.get('id'): l for l in lessons}
 
-        for unit in units:
+        for unit in units_to_process:
             lid = unit.get('lesson')
             lesson = lessons_map.get(lid)
             if lesson:
