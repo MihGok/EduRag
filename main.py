@@ -30,7 +30,7 @@ def analyze_batch_with_llm(session, courses_chunk, topic):
         f"Ты — эксперт-аналитик образовательных программ. Твоя задача — оценить релевантность курсов Stepik для темы: '{topic}'.\n"
         f"У тебя есть только названия курсов. Для каждого курса:\n"
         f"1. Сгенерируй краткое описание того, чему скорее всего учит этот курс (reasoning).\n"
-        f"2. Выставь оценку релевантности теме '{topic}' от 0 до 10 (course_score).\n\n"
+        f"2. Выставь оценку релевантности теме '{topic}' от 0 до 100 (course_score).\n\n"
         f"Список курсов для анализа:\n{items_text}\n"
         f"Верни результат строго в формате JSON-массива из {len(courses_chunk)} объектов."
     )
@@ -111,12 +111,12 @@ def main():
     # 4. Сортировка по убыванию рейтинга
     all_analyzed.sort(key=lambda x: x.get('course_score', 0), reverse=True)
 
-    # 5. Вывод ТОП-10
+    # 5. Вывод ТОП-20
     print("\n" + "="*50)
     print(f"РЕЗУЛЬТАТЫ АНАЛИЗА (Тема: {TARGET_TOPIC})")
     print("="*50)
     for item in all_analyzed[:20]:
-        print(f"[{item['course_score']}/10] {item['course_title']} (ID: {item['course_id']})")
+        print(f"[{item['course_score']}] {item['course_title']} (ID: {item['course_id']})")
         print(f"   Обоснование: {item['reasoning']}\n")
 
 if __name__ == "__main__":
