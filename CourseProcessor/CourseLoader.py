@@ -6,15 +6,21 @@ import time
 import random
 from urllib.parse import urlencode
 from dotenv import load_dotenv
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from requests.auth import HTTPBasicAuth
 
-# Импорт конфигураций (Новое)
+# Импорт конфигураций
 from services.config import ProxyConfig, AppConfig
 
 MAX_RETRIES = 5
 BASE_DELAY = 2
 load_dotenv()
+
+# Абсолютный путь к директории, где лежит этот файл.
+# Используем его как якорь для token_storage.json, чтобы файл
+# создавался рядом со скриптом, а не зависел от текущей рабочей директории.
+_THIS_DIR = os.path.abspath(os.path.dirname(__file__))
+TOKEN_STORAGE_PATH = os.path.join(_THIS_DIR, "token_storage.json")
 
 
 def make_request_with_retry(func):
@@ -31,18 +37,17 @@ def make_request_with_retry(func):
                         continue
                     return None
 
-                # Успешные коды: 200 (OK) и 201 (Created)
                 if getattr(response, 'status_code', None) in (200, 201):
                     return response
 
-                # Критические ошибки - не ретраим
+                # Критические ошибки — не ретраим
                 if response.status_code in (401, 403, 404):
                     print(f"[ERROR] Критическая ошибка {response.status_code}: {getattr(response, 'url', '')}")
                     if response.status_code == 401:
                         print(f"[ERROR] Детали 401: {response.text[:500]}")
                     return response
 
-                # Временные ошибки - ретраим
+                # Временные ошибки — ретраим
                 if response.status_code in (429, 500, 502, 503, 504):
                     if attempt < MAX_RETRIES - 1:
                         wait_time = (BASE_DELAY ** attempt) + random.uniform(0, 1)
@@ -72,22 +77,49 @@ def make_request_with_retry(func):
 
 
 class StepikCourseLoader:
+    """
+    Загрузчик курсов Stepik.
+
+    Потокобезопасность и использование одного экземпляра в ThreadPoolExecutor
+    -------------------------------------------------------------------------
+    В фазе B1 несколько потоков вызывают process_course() на ОДНОМ экземпляре
+    этого класса одновременно. Это безопасно по следующим причинам:
+
+    1. self.session — это requests.Session. Его метод .get()/.post() потокобезопасен:
+       внутри urllib3 пул соединений защищён threading.Lock.
+       Документация: https://github.com/psf/requests/issues/1738
+
+    2. После __init__ мы НИКОГДА не меняем self.session.headers и self.token.
+       Все потоки только читают эти поля — гонок нет.
+
+    3. Единственное изменяемое состояние, которое было раньше — это
+       self._last_raw_response. Оно использовалось как "побочный канал"
+       между fetch_object_single() и process_lesson(): первый записывал,
+       второй читал. При многопоточном использовании любой поток мог
+       перезаписать значение между этими двумя вызовами в другом потоке.
+
+       Этот паттерн УДАЛЁН. fetch_object_single() теперь возвращает оба значения
+       в одном кортеже (объект, raw_response), и вся коммуникация идёт через
+       локальные переменные, которые каждый поток видит только свои.
+
+    Итог: один StepikCourseLoader можно безопасно передать в ThreadPoolExecutor
+    без дополнительной синхронизации.
+    """
+
     API_URL = "https://stepik.org/api"
     OAUTH_URL = "https://stepik.org/oauth2/token/"
     AUTH_URL = "https://stepik.org/oauth2/authorize/"
     REDIRECT_URI = "http://localhost:5000/callback"
 
     def __init__(self):
-        # ИСПРАВЛЕНИЕ: Используем AppConfig
         self.client_id = AppConfig.STEPIK_CLIENT_ID
         self.client_secret = AppConfig.STEPIK_CLIENT_SECRET
-        
+
         if not self.client_id or not self.client_secret:
             raise ValueError("Не найдены STEPIK_CLIENT_ID или STEPIK_CLIENT_SECRET в .env")
-        
-        # ИСПРАВЛЕНИЕ: Создаем сессию С прокси для Stepik API
+
         self.session = ProxyConfig.get_session_with_proxy(use_proxy=True)
-        
+
         USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 YaBrowser/25.10.0.0 Safari/537.36"
         self.session.headers.update({
             'User-Agent': USER_AGENT,
@@ -97,17 +129,18 @@ class StepikCourseLoader:
             'Origin': 'https://stepik.org',
             'Connection': 'keep-alive',
         })
-        
+
         self.token = self._login_flow()
         if self.token:
             self.session.headers.update({'Authorization': f'Bearer {self.token}'})
-        self._last_raw_response: Optional[Dict[str, Any]] = None
+
+    # ------------------------------------------------------------------ AUTH
 
     def _login_flow(self) -> Optional[str]:
         """Логин через OAuth с использованием прокси"""
-        if os.path.exists("token_storage.json"):
+        if os.path.exists(TOKEN_STORAGE_PATH):
             try:
-                with open("token_storage.json", "r", encoding='utf-8') as f:
+                with open(TOKEN_STORAGE_PATH, "r", encoding='utf-8') as f:
                     data = json.load(f)
                     if data.get('refresh_token'):
                         print("[AUTH] Обнаружен refresh_token — пробуем обновить...")
@@ -115,22 +148,22 @@ class StepikCourseLoader:
             except Exception as e:
                 print(f"[AUTH] Ошибка чтения token_storage.json: {e}")
                 try:
-                    os.remove("token_storage.json")
-                except:
+                    os.remove(TOKEN_STORAGE_PATH)
+                except OSError:
                     pass
 
         return self._authorize_user_manual()
 
     def _save_tokens(self, tokens: Dict[str, Any]):
         """Сохраняет токены в файл"""
-        with open("token_storage.json", "w", encoding='utf-8') as f:
+        with open(TOKEN_STORAGE_PATH, "w", encoding='utf-8') as f:
             json.dump(tokens, f, ensure_ascii=False, indent=2)
         print("[AUTH] Токены сохранены в token_storage.json")
         if 'scope' in tokens:
             print(f"[AUTH] Полученные scopes: {tokens['scope']}")
 
     def _exchange_code_for_token(self, code: str) -> Optional[str]:
-        """Обмен кода на токен (используется прокси автоматически)"""
+        """Обмен кода на токен"""
         auth = HTTPBasicAuth(self.client_id, self.client_secret)
 
         @make_request_with_retry
@@ -164,16 +197,16 @@ class StepikCourseLoader:
         }
         auth_link = f"{self.AUTH_URL}?{urlencode(params)}"
 
-        print('\n' + '='*80)
+        print('\n' + '=' * 80)
         print('ВАЖНО! ПЕРЕД АВТОРИЗАЦИЕЙ:')
         print('1. Убедитесь, что ваше приложение на https://stepik.org/oauth2/applications/')
         print('   настроено с типом "Confidential" и grant type "authorization-code"')
         print('2. REDIRECT_URI должен быть точно: http://localhost:5000/callback')
-        print('='*80)
+        print('=' * 80)
         print('\nОТКРОЙТЕ ССЫЛКУ В БРАУЗЕРЕ ДЛЯ АВТОРИЗАЦИИ:')
         print(auth_link)
         print('\nПосле авторизации /callback в URL будет параметр ?code=... — вставьте его сюда.')
-        print('='*80 + '\n')
+        print('=' * 80 + '\n')
 
         code = input('Вставьте code из URL: ').strip()
         if not code:
@@ -181,7 +214,7 @@ class StepikCourseLoader:
         return self._exchange_code_for_token(code)
 
     def _refresh_access_token(self, refresh_token: str) -> Optional[str]:
-        """Обновление токена (используется прокси)"""
+        """Обновление токена"""
         auth = HTTPBasicAuth(self.client_id, self.client_secret)
 
         @make_request_with_retry
@@ -199,8 +232,8 @@ class StepikCourseLoader:
             print(f"[AUTH] Refresh вернул {resp.status_code}: {resp.text[:300]}")
             print("[AUTH] Удаляю старый токен и запрашиваю новую авторизацию...")
             try:
-                os.remove("token_storage.json")
-            except:
+                os.remove(TOKEN_STORAGE_PATH)
+            except OSError:
                 pass
             return self._authorize_user_manual()
 
@@ -219,31 +252,25 @@ class StepikCourseLoader:
             'Content-Type': 'application/json',
             'Referer': 'https://stepik.org/'
         }
-    
+
     @make_request_with_retry
     def _fetch_single_raw(self, url: str, headers: Dict[str, str], params: Any = None) -> Optional[requests.Response]:
-        """Базовый метод для GET запросов (прокси уже в session)"""
+        """Базовый метод для GET запросов"""
         try:
             return self.session.get(url, headers=headers, params=params, timeout=20)
         except Exception as e:
             print(f"[HTTP GET ERROR] {type(e).__name__}: {e}")
             return None
 
-    # --- МЕТОДЫ ПАРСИНГА И РАБОТЫ С КУРСОМ (СОХРАНЕНЫ ИЗ СТАРОЙ ВЕРСИИ) ---
+    # -------------------------------------------------------- ПОИСК КУРСОВ
 
     def get_course_ids_by_query(self, query: str, language: str = 'ru', limit: int = 50) -> List[int]:
-        """
-        Ищет ID курсов по запросу с фильтрацией:
-        - язык (по умолчанию ru)
-        - бесплатные
-        - публичные
-        Возвращает список ID.
-        """
+        """Ищет ID курсов по запросу с фильтрацией."""
         print(f"[SEARCH] Ищу курсы по запросу '{query}' (lang={language}, limit={limit})...")
         url = f"{self.API_URL}/search-results"
         course_ids = []
         page = 1
-        
+
         while len(course_ids) < limit:
             params = {
                 'query': query,
@@ -253,9 +280,9 @@ class StepikCourseLoader:
                 'type': 'course',
                 'page': page
             }
-            
+
             response = self._fetch_single_raw(url=url, headers=self._get_headers(), params=params)
-            
+
             if not response or response.status_code != 200:
                 print(f"[SEARCH] Ошибка запроса на странице {page}")
                 break
@@ -263,7 +290,7 @@ class StepikCourseLoader:
             data = response.json()
             results = data.get('search-results', [])
             meta = data.get('meta', {})
-            
+
             if not results:
                 print("[SEARCH] Результаты закончились.")
                 break
@@ -272,12 +299,12 @@ class StepikCourseLoader:
                 cid = r.get('target_id') or r.get('target')
                 if cid and cid not in course_ids:
                     course_ids.append(cid)
-            
+
             print(f"  -> Страница {page}: найдено {len(results)}, всего собрано {len(course_ids)}")
 
             if not meta.get('has_next'):
                 break
-                
+
             page += 1
             time.sleep(1.5)
 
@@ -290,42 +317,33 @@ class StepikCourseLoader:
         if not name:
             return 'Unnamed'
         return name
-    
+
     def get_course_outline(self, course: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        Собирает структуру курса (список всех уроков с названиями) БЕЗ скачивания контента.
-        Нужно для передачи списка уроков в LLM.
-        """
+        """Собирает структуру курса (список уроков с названиями) БЕЗ скачивания контента."""
         cid = course.get('id')
         print(f"[INFO] Сбор структуры курса {cid} для анализа...")
-        
-        # 1. Получаем секции
+
         section_ids = course.get('sections') or []
         if not section_ids:
             return []
-        
+
         sections = self.fetch_objects('sections', section_ids)
         sections.sort(key=lambda x: x.get('position', 0))
-        
+
         all_lessons_metadata = []
-        
-        # 2. Проходим по секциям и собираем юниты
+
         for section in sections:
             unit_ids = section.get('units') or []
             if not unit_ids:
                 continue
-                
-            # Загружаем все юниты секции разом
+
             units = self.fetch_objects('units', unit_ids)
             units.sort(key=lambda x: x.get('position', 0))
-            
-            # Собираем ID уроков
+
             lesson_ids = [u.get('lesson') for u in units if u.get('lesson')]
-            
-            # Загружаем метаданные уроков (названия)
             lessons = self.fetch_objects('lessons', lesson_ids)
             lessons_map = {l['id']: l for l in lessons}
-            
+
             for unit in units:
                 lid = unit.get('lesson')
                 lesson = lessons_map.get(lid)
@@ -333,27 +351,36 @@ class StepikCourseLoader:
                     all_lessons_metadata.append({
                         'lesson_id': lesson['id'],
                         'title': lesson['title'],
-                        'section_title': section['title'] # Может пригодиться для контекста
+                        'section_title': section['title']
                     })
-                    
+
         print(f"[INFO] Найдено уроков: {len(all_lessons_metadata)}")
         return all_lessons_metadata
 
-    def fetch_object_single(self, object_type: str, object_id: int) -> Dict[str, Any]:
+    # --------------------------------------------------------- FETCH API
+
+    def fetch_object_single(self, object_type: str, object_id: int) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Загружает один объект по ID.
+
+        Возвращает кортеж (parsed_object, raw_response_body).
+        Оба значения — локальные, без записи в self.
+        Это гарантирует потокобезопасность: каждый вызывающий поток
+        получает свои данные через return, а не через общее состояние объекта.
+        """
         url = f"{self.API_URL}/{object_type}/{object_id}"
         response = self._fetch_single_raw(url=url, headers=self._get_headers())
         if not response or response.status_code != 200:
-            return {}
+            return {}, {}
 
         data = response.json()
-        self._last_raw_response = data
 
         items = data.get(object_type) or data.get(object_type + 's') or data.get(object_type.rstrip('s'))
         if isinstance(items, list) and items:
-            return items[0]
+            return items[0], data
         if isinstance(data, dict) and data.get('id'):
-            return data
-        return {}
+            return data, data
+        return {}, data
 
     def fetch_objects(self, object_type: str, object_ids: List[int]) -> List[Dict[str, Any]]:
         if not object_ids:
@@ -380,26 +407,19 @@ class StepikCourseLoader:
 
         return objects
 
+    # --------------------------------------------------------- ENROLLMENT
+
     def enroll_in_course(self, course_id: int) -> bool:
         """Записаться на курс через API"""
         url = f"{self.API_URL}/enrollments"
-        payload = {
-            "enrollment": {
-                "course": str(course_id)
-            }
-        }
-        
+        payload = {"enrollment": {"course": str(course_id)}}
+
         @make_request_with_retry
         def execute():
-            return self.session.post(
-                url,
-                headers=self._get_headers(),
-                json=payload,
-                timeout=15
-            )
-        
+            return self.session.post(url, headers=self._get_headers(), json=payload, timeout=15)
+
         response = execute()
-        
+
         if response and response.status_code in (200, 201):
             print(f"[SUCCESS] Зачислен на курс {course_id}")
             return True
@@ -410,7 +430,6 @@ class StepikCourseLoader:
                 return True
             print(f"[ERROR] Ошибка 400 при записи на курс {course_id}: {error_text[:300]}")
             return False
-        
         elif response and response.status_code == 401:
             print(f"[ERROR] 401 Unauthorized при записи на курс {course_id}")
             return False
@@ -425,15 +444,13 @@ class StepikCourseLoader:
         """Проверить, записан ли пользователь на курс"""
         url = f"{self.API_URL}/enrollments"
         params = {"course": course_id}
-        
+
         response = self._fetch_single_raw(url=url, headers=self._get_headers(), params=params)
-        
         if not response or response.status_code != 200:
             return False
-        
+
         data = response.json()
         enrollments = data.get('enrollments', [])
-        
         return len(enrollments) > 0
 
     def search_public_free_courses(self, query: str, limit: int = 1) -> List[Dict[str, Any]]:
@@ -474,6 +491,8 @@ class StepikCourseLoader:
 
         return found[:limit]
 
+    # -------------------------------------------------------- FILE I/O
+
     def save_json(self, data: Any, folder: str, filename: str):
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, filename)
@@ -483,12 +502,22 @@ class StepikCourseLoader:
         except Exception as e:
             print(f"Ошибка сохранения {path}: {e}")
 
+    # -------------------------------------------------------- ОБРАБОТКА
+
     def process_course(self, course: Dict[str, Any], allowed_lesson_ids: Optional[List[int]] = None):
+        """
+        Скачивает контент курса и сохраняет в папку на диске.
+
+        course_dir строится как абсолютный путь относительно CWD на момент вызова.
+        Это гарантирует однозначность: даже если что-то ещё в процессе меняет CWD
+        (крайне редко, но теоретически возможно в многопоточном коде),
+        мы зафиксируем путь в начале и используем его повсюду ниже.
+        """
         cid = course.get('id')
         title = self._sanitize_filename(course.get('title', f'course_{cid}'))
-        course_dir = f"Course_{cid}_{title}"
+        course_dir = os.path.abspath(f"Course_{cid}_{title}")
         os.makedirs(course_dir, exist_ok=True)
-        
+
         # Логика записи на курс
         is_enrolled = course.get('is_enrolled', False)
         if not is_enrolled:
@@ -496,17 +525,15 @@ class StepikCourseLoader:
                 print(f"[INFO] Не записаны на курс {cid}. Попытка записи...")
                 self.enroll_in_course(cid)
                 time.sleep(1)
-        
+
         self.save_json(course, course_dir, f"course_{cid}.json")
 
         section_ids = course.get('sections') or []
         sections = self.fetch_objects('sections', section_ids)
         sections.sort(key=lambda x: x.get('position', 0))
-        
-        for s in sections:
-            # Передаем фильтр дальше в секцию
-            self.process_section(s, course_dir, allowed_lesson_ids)
 
+        for s in sections:
+            self.process_section(s, course_dir, allowed_lesson_ids)
 
     def process_section(self, section: Dict[str, Any], parent_dir: str, allowed_lesson_ids: Optional[List[int]] = None):
         sid = section.get('id')
@@ -520,11 +547,10 @@ class StepikCourseLoader:
 
         units = self.fetch_objects('units', unit_ids)
         units.sort(key=lambda x: x.get('position', 0))
-        
-        # Фильтрация юнитов перед обработкой
+
+        # Фильтрация юнитов
         units_to_process = []
         if allowed_lesson_ids is not None:
-            # Если фильтр включен, оставляем только юниты с разрешенными уроками
             allowed_set = set(allowed_lesson_ids)
             for u in units:
                 if u.get('lesson') in allowed_set:
@@ -533,13 +559,11 @@ class StepikCourseLoader:
             units_to_process = units
 
         if not units_to_process:
-            # Если в секции нет полезных уроков, не создаем папку и выходим
             return
 
         os.makedirs(section_dir, exist_ok=True)
         self.save_json(section, section_dir, f"section_{sid}.json")
 
-        # Загрузка объектов уроков для оставшихся юнитов
         lesson_ids = [u.get('lesson') for u in units_to_process if u.get('lesson')]
         lessons = self.fetch_objects('lessons', lesson_ids)
         lessons_map = {l.get('id'): l for l in lessons}
@@ -564,11 +588,15 @@ class StepikCourseLoader:
         step_ids = lesson.get('steps') or []
         if not step_ids:
             print(f"    [INFO] Урок {lesson_id} не содержит steps в bulk. Пытаюсь одиночный запрос...")
-            full = self.fetch_object_single('lessons', lesson_id)
-            
-            if getattr(self, '_last_raw_response', None):
-                self.save_json(self._last_raw_response, lesson_dir, f"lesson_raw_{lesson_id}.json")
-                self._last_raw_response = None
+
+            # fetch_object_single возвращает кортеж (объект, raw_ответ).
+            # Оба значения — локальные переменные этого вызова.
+            # Даже если другой поток одновременно вызывает тот же метод,
+            # его return идёт в свои локальные переменные — пересечения нет.
+            full, raw_data = self.fetch_object_single('lessons', lesson_id)
+
+            if raw_data:
+                self.save_json(raw_data, lesson_dir, f"lesson_raw_{lesson_id}.json")
 
             if full and full.get('steps'):
                 lesson = full
