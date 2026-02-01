@@ -73,39 +73,6 @@ LESSON_ANALYSIS_SCHEMA = {
 }
 
 
-# === СХЕМА ДЛЯ АНАЛИЗА ТРАНСКРИПЦИИ (уже существует) ===
-
-VIDEO_ANALYSIS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "timestamps": {
-            "type": "array",
-            "description": "Ключевые моменты видео для извлечения кадров",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "timestamp": {
-                        "type": "number",
-                        "description": "Время в секундах"
-                    },
-                    "reason": {
-                        "type": "string",
-                        "description": "Описание того, что должно быть на кадре"
-                    }
-                },
-                "required": ["timestamp", "reason"]
-            }
-        },
-        "summary": {
-            "type": "string",
-            "description": "Краткое содержание видеоурока"
-        }
-    },
-    "required": ["timestamps", "summary"]
-}
-
-
-# === ДОПОЛНИТЕЛЬНЫЕ СХЕМЫ ===
 
 COURSE_VALIDATION_SCHEMA = {
     "type": "object",

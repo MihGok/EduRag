@@ -7,9 +7,9 @@ from typing import List, Optional
 import requests
 import uvicorn
 
-from .core.model_manager import model_manager
-from .services.whisper_service import WhisperService
-from .services.text_encoder_service import TextEncoderService
+from core.model_manager import model_manager
+from services.whisper_service import WhisperService
+from services.text_encoder_service import TextEncoderService
 
 app = FastAPI()
 TEMP_DIR = "server_temp"

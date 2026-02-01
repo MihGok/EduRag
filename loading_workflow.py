@@ -91,7 +91,7 @@ def _analyze_lesson_batch(session: requests.Session, topic: str, course_title: s
     
     return []
 
-# [Добавьте функцию фильтрации контента курса]
+
 def filter_course_content(
     loader: StepikCourseLoader, 
     course_obj: Dict, 
@@ -106,7 +106,7 @@ def filter_course_content(
     course_id = course_obj['id']
     course_title = course_obj['title']
     
-    # 1. Получаем список уроков (без скачивания контента)
+    
     lessons_metadata = loader.get_course_outline(course_obj)
     if not lessons_metadata:
         print(f"   [WARN] В курсе {course_id} не найдено уроков.")
@@ -126,10 +126,6 @@ def filter_course_content(
         results = _analyze_lesson_batch(session, topic, course_title, chunk, llm_endpoint)
         
         for res in results:
-            # ЛОГИКА ОТСЕВА:
-            # 0-2: Мусор / Вводные / Орг моменты
-            # 3-4: Косвенное
-            # 5+: Полезное
             score = res.get('lesson_score', 0)
             lid = res.get('lesson_id')
             
