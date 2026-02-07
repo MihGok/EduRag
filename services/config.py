@@ -77,8 +77,22 @@ class ProxyConfig:
 class AppConfig:
     """Общие настройки приложения"""
     
+    # === LLM MODELS ===
+    # Малая модель для анализа (SmolLM3-3B)
+    LLM_MODEL_SMALL = os.getenv("LLM_MODEL_SMALL", "smollm3-3b-q4_k_m.gguf")
+    
+    # Большая модель для сложных задач (Saiga 12B)
+    LLM_MODEL_LARGE = os.getenv("LLM_MODEL_LARGE", "saiga_nemo_12b.Q4_K_M.gguf")
+    
+    # Какую модель использовать для разных задач
+    LLM_DEFAULT_ANALYSIS = os.getenv("LLM_DEFAULT_ANALYSIS", "smollm3-3b-q4_k_m.gguf")
+    LLM_DEFAULT_CONCEPTS = os.getenv("LLM_DEFAULT_CONCEPTS", "saiga_nemo_12b.Q4_K_M.gguf")
+    
+    # LLM Endpoint
+    LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "http://127.0.0.1:8000/generate")
+    
     # ML Backend
-    ML_SERVER_URL = os.getenv("ML_SERVER_URL", "http://localhost:8000")
+    ML_SERVER_URL = os.getenv("ML_SERVER_URL", "http://localhost:8001")
     
     # MinIO
     MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
@@ -129,8 +143,24 @@ class AppConfig:
         if errors:
             print("[Config] ОШИБКИ КОНФИГУРАЦИИ:")
             for err in errors:
-                print(f"  ❌ {err}")
+                print(f"  {err}")
             return False
         
-        print("[Config] ✅ Все критические настройки в порядке")
+        print("[Config] Все критические настройки в порядке")
         return True
+    
+    @classmethod
+    def get_model_path(cls, task: str = "analysis") -> str:
+        """
+        Возвращает путь к модели для конкретной задачи.
+        
+        Args:
+            task: 'analysis' (анализ курсов/уроков) или 'concepts' (объединение в концепции)
+        
+        Returns:
+            Путь к модели внутри Docker контейнера (например: /models/smollm3-3b-q4_k_m.gguf)
+        """
+        if task == "concepts":
+            return f"/models/{cls.LLM_DEFAULT_CONCEPTS}"
+        else:
+            return f"/models/{cls.LLM_DEFAULT_ANALYSIS}"

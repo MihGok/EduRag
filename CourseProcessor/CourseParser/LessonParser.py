@@ -11,8 +11,8 @@ class LessonAnalyzer:
     STEP_FILENAME_SUFFIX = ".json"
 
     def __init__(self, lesson_dir: str, knowledge_base_dir: str, course_id: str):
-        self.lesson_dir = lesson_dir                  # уже абсолютный
-        self.knowledge_base_dir = knowledge_base_dir  # уже абсолютный
+        self.lesson_dir = lesson_dir                 
+        self.knowledge_base_dir = knowledge_base_dir
         self.course_id = course_id
 
     def iter_step_files(self) -> Iterator[str]:

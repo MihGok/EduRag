@@ -26,13 +26,25 @@ class BatchTextRequest(BaseModel):
 class TranscribeRequest(BaseModel):
     video_url: str
 
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "ML Backend",
+        "models": {
+            "current": model_manager.current_model_name if model_manager.current_model else None
+        }
+    }
+
 @app.post("/transcribe")
 async def transcribe(req: TranscribeRequest):
     path = os.path.join(TEMP_DIR, f"{uuid.uuid4()}.mp4")
     try:
         with requests.get(req.video_url, stream=True) as r:
             with open(path, 'wb') as f:
-                for chunk in r.iter_content(8192): f.write(chunk)
+                for chunk in r.iter_content(8192): 
+                    f.write(chunk)
         
         whisper = model_manager.get_model("whisper", WhisperService)
         segments = whisper.transcribe(path)
@@ -44,7 +56,8 @@ async def transcribe(req: TranscribeRequest):
             ]
         }
     finally:
-        if os.path.exists(path): os.remove(path)
+        if os.path.exists(path): 
+            os.remove(path)
 
 
 @app.post("/text_embed")
