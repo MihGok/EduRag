@@ -1,22 +1,56 @@
 services:
-  llm-endpoint:
+  llm-endpoint-1:
     build: .
-    container_name: llm_endpoint
+    container_name: llm_endpoint_1
     ports:
       - "8000:8000"
     restart: unless-stopped
 
     environment:
-      DEFAULT_MODEL_PATH: /models/saiga_nemo_12b.Q4_K_M.gguf
-      DEFAULT_N_CTX: "4096"
+      DEFAULT_MODEL_PATH: /models/smollm3-3b-q4_k_m.gguf
+      DEFAULT_N_CTX: "2048"
       DEFAULT_N_GPU_LAYERS: "-1"
+      INSTANCE_ID: "1"
 
     volumes:
       - ./models:/models:ro
       - ./app/main.py:/srv/endpoint/main.py
 
-    # Для совместимости с твоей версией Compose используем gpus: all
-    gpus: all
+    # GPU доступ - первый инстанс
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']  # GPU 0
+              capabilities: [gpu]
 
-    # Явно указываем команду (можно убрать — будет использован CMD из Dockerfile)
-    command: ["/opt/venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--reload"]
+    command: ["/opt/venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+
+  llm-endpoint-2:
+    build: .
+    container_name: llm_endpoint_2
+    ports:
+      - "8001:8000"  # Внешний порт 8001, внутренний 8000
+    restart: unless-stopped
+
+    environment:
+      DEFAULT_MODEL_PATH: /models/smollm3-3b-q4_k_m.gguf
+      DEFAULT_N_CTX: "2048"
+      DEFAULT_N_GPU_LAYERS: "-1"
+      INSTANCE_ID: "2"
+
+    volumes:
+      - ./models:/models:ro
+      - ./app/main.py:/srv/endpoint/main.py
+
+    # GPU доступ - второй инстанс (та же GPU, но отдельный процесс)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']  # GPU 0 (можно использовать ту же)
+              capabilities: [gpu]
+
+    command: ["/opt/venv/bin/uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

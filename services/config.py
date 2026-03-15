@@ -143,10 +143,10 @@ class AppConfig:
         if errors:
             print("[Config] ОШИБКИ КОНФИГУРАЦИИ:")
             for err in errors:
-                print(f"  {err}")
+                print(f"  ❌ {err}")
             return False
         
-        print("[Config] Все критические настройки в порядке")
+        print("[Config] ✅ Все критические настройки в порядке")
         return True
     
     @classmethod

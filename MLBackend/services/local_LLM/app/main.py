@@ -165,3 +165,18 @@ def generate(req: GenerateRequest):
             return {"success": False, "error": "Failed to parse JSON", "raw_text": text}
 
     return {"success": True, "text": text}
+
+
+@app.post("/unload")
+def unload_model():
+    """
+    Принудительная выгрузка модели для освобождения VRAM.
+    """
+    try:
+        if _current_llm is not None:
+            _unload_current_model()
+            return {"success": True, "message": "Model unloaded and VRAM cleared."}
+        else:
+            return {"success": True, "message": "No model was loaded."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to unload model: {e}")

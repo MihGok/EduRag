@@ -2,9 +2,6 @@ import gc
 import torch
 import threading
 from typing import Dict, Any, Callable, Optional, List
-from MLBackend.services.local_LLM.app.main import get_llm_instance
-import os
-
 
 class ModelManager:
     """
@@ -104,7 +101,8 @@ class ModelManager:
             self._unload_current()
 
             # Загружаем новые LLM
-
+            from MLBackend.services.local_LLM.app.main import get_llm_instance
+            import os
             
             model_path = os.getenv("LLM_MODEL_PATH", "MLBackend/services/local_LLM/models/smollm3-3b-q4_k_m.gguf")
             n_ctx = int(os.getenv("DEFAULT_N_CTX", "2048"))
@@ -165,5 +163,4 @@ class ModelManager:
         return self.whisper_instances[index]
 
 
-# Глобальный инстанс менеджера
 model_manager = ModelManager()
